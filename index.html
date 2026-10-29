@@ -1,0 +1,603 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+<title>Dungeon Hunter — Isometric ARPG Prototype (Canvas 2D)</title>
+<style>
+  /* ====== Reset & layout fullscreen agar siap tampil di tab preview ====== */
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { width: 100%; height: 100%; overflow: hidden; background: #0d0f1a; }
+  body { font-family: "Segoe UI", Arial, sans-serif; touch-action: none; -webkit-user-select: none; user-select: none; }
+  #game { display: block; position: absolute; inset: 0; cursor: crosshair; }
+  #hint {
+    position: absolute; top: 8px; left: 50%; transform: translateX(-50%);
+    color: #cfd6ff; background: rgba(10,12,30,.55); padding: 6px 14px; border-radius: 20px;
+    font-size: 12px; letter-spacing: .3px; pointer-events: none; white-space: nowrap; z-index: 5;
+  }
+  @media (max-width: 640px) { #hint { font-size: 10px; } }
+</style>
+</head>
+<body>
+<canvas id="game"></canvas>
+<div id="hint">WASD / Panah / Joystick = Gerak &nbsp;•&nbsp; SPACE / Tombol ⚔ = Attack &nbsp;•&nbsp; SHIFT / Tombol ✦ = Skill (MP)</div>
+
+<script>
+"use strict";
+/* ============================================================================
+ *  DUNGEON HUNTER — Web Prototype Action RPG 2.5D Isometric
+ *  Teknologi : HTML5 Canvas 2D + JavaScript murni (tanpa aset eksternal).
+ *  Arsitektur: InputHandler | Camera | IsometricMap | Player | Enemy |
+ *              MobileUI (joystick virtual + tombol aksi + HP/MP bar) | Game loop
+ *  Semua visual digambar prosedural via ctx (diamond grid, kapsul, arc tebasan).
+ * ==========================================================================*/
+
+/* ============================== KONFIGURASI ============================== */
+const CFG = {
+  TILE_W: 96,            // lebar diamond tile (pixel dunia layar)
+  TILE_H: 48,            // tinggi diamond tile
+  MAP_SIZE: 24,          // peta berbentuk GRID x GRID tile
+  PLAYER_SPEED: 3.2,     // satuan world-unit / detik (diagonal otomatis dinormalkan)
+  PLAYER_R: 16,          // radius kapsul player (pixel layar)
+  ENEMY_SPEED: 1.5,
+  ENEMY_R: 14,
+  ENEMY_COUNT: 3,
+  ATTACK_RANGE: 95,      // jangkauan hitbox tebasan (pixel layar)
+  ATTACK_ARC: Math.PI * 0.75, // lebar sudut busur tebasan (135 derajat)
+  ATTACK_DMG: 25,
+  SKILL_DMG: 45,         // AoE 360 derajat
+  SKILL_COST: 20,        // konsumsi MP
+  STATE: { IDLE: "IDLE", WALK: "WALK", ATTACK: "ATTACK" },
+};
+
+/* Utilitas umum ------------------------------------------------------------ */
+const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+const lerp  = (a, b, t) => a + (b - a) * t;
+const dist2 = (ax, ay, bx, by) => { const dx = ax - bx, dy = ay - by; return dx * dx + dy * dy; };
+
+/** Bulatkan sudut ke 8 arah mata angin (N, NE, E, SE, S, SW, W, NW). */
+function snapAngle8(angle) {
+  const step = Math.PI / 4;
+  return Math.round(angle / step) * step;
+}
+
+/* ==================== PROYEKSI ISOMETRIK (2.5D) ========================== */
+/** Konversi koordinat dunia 2D -> posisi layar isometrik (diamond projection). */
+function toIso(x, y) {
+  return { x: (x - y) * 0.5, y: (x + y) * 0.25 };
+}
+/** Invers proyeksi: titik layar -> koordinat dunia (dipakai untuk batas pergerakan). */
+function fromIso(sx, sy) {
+  const x = sx + sy, y = sx - sy;
+  return { x: x * 0.5, y: y * 0.5 };
+}
+
+/* ============================ INPUT HANDLER ============================== */
+/**
+ * InputHandler — mengumpulkan input dari keyboard, mouse/touch (joystick &
+ * tombol UI), lalu menyajikannya sebagai vector gerak analog + flag aksi.
+ */
+class InputHandler {
+  constructor(canvas) {
+    this.keys = new Set();
+    this.moveVec = { x: 0, y: 0 };   // hasil gabungan keyboard + joystick
+    this.attackPressed = false;       // edge-triggered (satu kali tekan)
+    this.skillPressed = false;
+    this.joystick = { active: false, id: null, ox: 0, oy: 0, vx: 0, vy: 0, mag: 0 };
+    this.uiButtons = [];              // diisi oleh MobileUI saat build tombol aksi
+
+    window.addEventListener("keydown", (e) => {
+      if (["Space","ArrowUp","ArrowDown","ArrowLeft","ArrowRight"].includes(e.code)) e.preventDefault();
+      if (!this.keys.has(e.code)) {                     // cegah auto-repeat
+        if (e.code === "Space") this.attackPressed = true;
+        if (e.code === "ShiftLeft" || e.code === "ShiftRight") this.skillPressed = true;
+      }
+      this.keys.add(e.code);
+    });
+    window.addEventListener("keyup", (e) => this.keys.delete(e.code));
+
+    canvas.addEventListener("pointerdown", (e) => this._onDown(e));
+    canvas.addEventListener("pointermove", (e) => this._onMove(e));
+    canvas.addEventListener("pointerup",   (e) => this._onUp(e));
+    canvas.addEventListener("pointercancel",(e) => this._onUp(e));
+  }
+
+  /** Router sentuhan awal: prioritaskan tombol UI, lalu area joystick. */
+  _onDown(e) {
+    for (const b of this.uiButtons) {
+      if (dist2(e.clientX, e.clientY, b.x, b.y) <= b.r * b.r) {
+        b.pressed = true; b.justPressed = true;
+        return;
+      }
+    }
+    const j = this.joystick;
+    if (!j.active && e.clientX < innerWidth * 0.55) {   // paruh kiri layar = joystick
+      j.active = true; j.id = e.pointerId; j.ox = e.clientX; j.oy = e.clientY;
+      j.vx = 0; j.vy = 0; j.mag = 0;
+    }
+  }
+  _onMove(e) {
+    const j = this.joystick;
+    if (j.active && e.pointerId === j.id) {
+      const dx = e.clientX - j.ox, dy = e.clientY - j.oy;
+      const maxR = 60, len = Math.hypot(dx, dy);
+      const k = len > maxR ? maxR / len : 1;             // clamp simpul joystick
+      j.vx = dx * k / maxR; j.vy = dy * k / maxR; j.mag = Math.min(len / maxR, 1);
+    }
+  }
+  _onUp(e) {
+    const j = this.joystick;
+    if (j.active && e.pointerId === j.id) { j.active = false; j.vx = 0; j.vy = 0; j.mag = 0; }
+  }
+
+  /** Perbarui vector gerak gabungn (keyboard WASD/panah + joystick). */
+  update() {
+    let kx = 0, ky = 0;
+    if (this.keys.has("KeyA") || this.keys.has("ArrowLeft"))  kx -= 1;
+    if (this.keys.has("KeyD") || this.keys.has("ArrowRight")) kx += 1;
+    if (this.keys.has("KeyW") || this.keys.has("ArrowUp"))    ky -= 1;
+    if (this.keys.has("KeyS") || this.keys.has("ArrowDown"))  ky += 1;
+    const j = this.joystick;
+    const rx = kx + j.vx, ry = ky + j.vy;
+    const len = Math.hypot(rx, ry);
+    if (len > 1) { this.moveVec.x = rx / len; this.moveVec.y = ry / len; }
+    else { this.moveVec.x = rx; this.moveVec.y = ry; }
+  }
+
+  /** Ambil & reset flag aksi edge-triggered (dipanggil Player tiap frame). */
+  consumeAttack() {
+    let p = this.attackPressed;
+    for (const b of this.uiButtons) if (b.type === "attack" && b.justPressed) { p = true; b.justPressed = false; }
+    this.attackPressed = false; return p;
+  }
+  consumeSkill() {
+    let p = this.skillPressed;
+    for (const b of this.uiButtons) if (b.type === "skill" && b.justPressed) { p = true; b.justPressed = false; }
+    this.skillPressed = false; return p;
+  }
+}
+
+/* =============================== CAMERA ================================== */
+/** Camera — mengikuti posisi player dengan smooth-follow (lerp) dan deadzone. */
+class Camera {
+  constructor() { this.x = 0; this.y = 0; this.shake = 0; }
+  follow(target, dt) {
+    const t = 1 - Math.pow(0.0001, dt);   // framerate-independent smoothing
+    this.x = lerp(this.x, target.x, t);
+    this.y = lerp(this.y, target.y, t);
+    if (this.shake > 0) this.shake = Math.max(0, this.shake - dt * 3);
+  }
+  /** Offset kamera terhadap satu titik iso (dipanggil renderer per entity). */
+  apply(px, py) {
+    const s = this.shake;
+    const ox = s > 0 ? (Math.random() - 0.5) * s * 14 : 0;
+    const oy = s > 0 ? (Math.random() - 0.5) * s * 14 : 0;
+    return { x: px - this.x + innerWidth / 2 + ox, y: py - this.y + innerHeight / 2 + oy };
+  }
+}
+
+/* ============================ ISOMETRIC MAP ============================== */
+/**
+ * IsometricMap — menggambar grid lantai belah ketupat (diamond) prosedural,
+ * pilar dekorasi, dan menyediakan fungsi pembatas area (boundary check).
+ */
+class IsometricMap {
+  constructor(size) {
+    this.size = size;
+    // Pilar dekorasi acak (tidak menabrak spawn player di tengah map)
+    this.pillars = [];
+    for (let i = 0; i < 10; i++) {
+      const gx = Math.floor(Math.random() * size), gy = Math.floor(Math.random() * size);
+      if (Math.abs(gx - size / 2) < 3 && Math.abs(gy - size / 2) < 3) continue;
+      this.pillars.push({ gx, gy, h: 34 + Math.random() * 26 });
+    }
+  }
+  /** Batas pergerakan dunia (bentuk bujur sangkar logis -> tampak diamond). */
+  clampToWorld(p) {
+    const m = 30;
+    p.x = clamp(p.x, m, this.size * 64 - m);
+    p.y = clamp(p.y, m, this.size * 64 - m);
+    return p;
+  }
+  /** Render seluruh lantai diamond + dekorasi terhadap camera & context. */
+  draw(ctx, cam) {
+    const HW = CFG.TILE_W / 2, HH = CFG.TILE_H / 2;
+    for (let gy = 0; gy < this.size; gy++) {
+      for (let gx = 0; gx < this.size; gx++) {
+        const iso = toIso(gx * 64 + 32, gy * 64 + 32);
+        const s = cam.apply(iso.x, iso.y);
+        if (s.x < -HW || s.x > innerWidth + HW || s.y < -HH || s.y > innerHeight + HH) continue; // culling
+        const alt = (gx + gy) % 2 === 0;
+        ctx.beginPath();
+        ctx.moveTo(s.x, s.y - HH); ctx.lineTo(s.x + HW, s.y);
+        ctx.lineTo(s.x, s.y + HH); ctx.lineTo(s.x - HW, s.y);
+        ctx.closePath();
+        ctx.fillStyle = alt ? "#232a45" : "#1d2340";
+        ctx.fill();
+        ctx.strokeStyle = "rgba(120,140,220,0.10)";
+        ctx.lineWidth = 1;
+        ctx.stroke();
+      }
+    }
+    // Batas luar map (tembok dungeon sederhana)
+    for (const pl of this.pillars) {
+      const iso = toIso(pl.gx * 64 + 32, pl.gy * 64 + 32);
+      const s = cam.apply(iso.x, iso.y);
+      if (s.x < -60 || s.x > innerWidth + 60 || s.y < -120 || s.y > innerHeight + 60) continue;
+      ctx.fillStyle = "rgba(0,0,0,0.35)";                 // bayangan pilar
+      ctx.beginPath(); ctx.ellipse(s.x, s.y, 22, 11, 0, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = "#3a4470";                          // badan pilar
+      ctx.fillRect(s.x - 10, s.y - pl.h, 20, pl.h);
+      ctx.fillStyle = "#4c588c";                          // kapitel pilar
+      ctx.fillRect(s.x - 13, s.y - pl.h - 7, 26, 8);
+    }
+  }
+}
+
+/* ================================ PLAYER ================================ */
+/**
+ * Player — CharacterBody ala ARPG: state machine IDLE/WALK/ATTACK,
+ * facing 8 arah mata angin, serangan busur (arc) dengan hitbox kerucut,
+ * serta skill AoE melingkar yang mengonsumsi MP.
+ */
+class Player {
+  constructor(x, y) {
+    this.pos = { x, y };                 // posisi dunia (sebelum proyeksi iso)
+    this.facing = 0;                     // radian arah hadap (screen-space)
+    this.state = CFG.STATE.IDLE;
+    this.attackT = 0;                    // timer progres animasi serangan
+    this.attackKind = "slash";           // "slash" | "aoe"
+    this.hp = 100; this.maxHp = 100;
+    this.mp = 100; this.maxMp = 100;
+    this.invuln = 0;                     // i-frame setelah kena damage musuh
+    this.hitDone = false;                // penanda hitbox sudah dieksekusi
+    this.bob = 0;                        // fase animasi naik-turun saat jalan
+  }
+
+  /** Transisi state terpusat (mirip pola _enter_state pada Godot script). */
+  setState(s) { this.state = s; }
+
+  /** Perbarui logika: input -> movement terkunci-state -> eksekusi attack/skill. */
+  update(dt, input, game) {
+    this.bob += dt * 10;
+    if (this.invuln > 0) this.invuln -= dt;
+    if (this.mp < this.maxMp) this.mp = Math.min(this.maxMp, this.mp + dt * 6); // regen MP
+
+    // ---- State ATTACK: kunci gerakan sampai animasi selesai ----
+    if (this.state === CFG.STATE.ATTACK) {
+      this.attackT -= dt;
+      if (!this.hitDone && this.attackT <= 0.18) { this._executeHit(game); this.hitDone = true; }
+      if (this.attackT <= 0) this.setState(CFG.STATE.IDLE);
+      return;
+    }
+
+    // ---- Pemicu aksi ----
+    if (input.consumeSkill() && this.mp >= CFG.SKILL_COST) {
+      this.mp -= CFG.SKILL_COST;
+      this._startAttack("aoe");
+      return;
+    }
+    if (input.consumeAttack()) { this._startAttack("slash"); return; }
+
+    // ---- Movement analog 8 arah ----
+    const v = input.moveVec;
+    if (Math.hypot(v.x, v.y) > 0.15) {
+      this.facing = snapAngle8(Math.atan2(v.y, v.x));       // kompas 8 mata angin
+      const wx = (v.x + v.y) * 0.7071, wy = (v.y - v.x) * 0.7071; // layar -> sumbu dunia iso
+      this.pos.x += wx * CFG.PLAYER_SPEED * dt * 64;
+      this.pos.y += wy * CFG.PLAYER_SPEED * dt * 64;
+      game.map.clampToWorld(this.pos);
+      this.setState(CFG.STATE.WALK);
+    } else {
+      this.setState(CFG.STATE.IDLE);
+    }
+  }
+
+  _startAttack(kind) {
+    this.attackKind = kind;
+    this.attackT = kind === "aoe" ? 0.45 : 0.35;
+    this.hitDone = false;
+    this.setState(CFG.STATE.ATTACK);
+  }
+
+  /** Eksekusi damage pada pertengahan animasi (frame "impact"). */
+  _executeHit(game) {
+    const me = toIso(this.pos.x, this.pos.y);
+    for (const e of game.enemies) {
+      if (!e.alive) continue;
+      const ee = toIso(e.pos.x, e.pos.y);
+      const d = Math.hypot(ee.x - me.x, ee.y - me.y);
+      if (this.attackKind === "aoe") {
+        if (d <= CFG.ATTACK_RANGE * 1.35) e.takeDamage(CFG.SKILL_DMG, game);
+      } else {
+        if (d > CFG.ATTACK_RANGE) continue;
+        const ang = Math.atan2(ee.y - me.y, ee.x - me.x);
+        let diff = Math.abs(((ang - this.facing + Math.PI * 3) % (Math.PI * 2)) - Math.PI);
+        if (diff <= CFG.ATTACK_ARC / 2) e.takeDamage(CFG.ATTACK_DMG, game); // dalam kerucut tebasan
+      }
+    }
+    game.camera.shake = this.attackKind === "aoe" ? 0.6 : 0.35;
+  }
+
+  /** Damage dari musuh dengan i-frame singkat. */
+  takeDamage(d) {
+    if (this.invuln > 0) return;
+    this.hp = Math.max(0, this.hp - d);
+    this.invuln = 0.6;
+  }
+
+  /** Render: bayangan, kapsul dua-tone, panah arah hadap, arc efek serangan. */
+  draw(ctx, cam) {
+    const iso = toIso(this.pos.x, this.pos.y);
+    const s = cam.apply(iso.x, iso.y);
+    const bounce = this.state === CFG.STATE.WALK ? Math.abs(Math.sin(this.bob)) * 4 : 0;
+    const R = CFG.PLAYER_R;
+
+    ctx.fillStyle = "rgba(0,0,0,0.4)";                       // bayangan isometrik
+    ctx.beginPath(); ctx.ellipse(s.x, s.y + 4, R * 1.15, R * 0.55, 0, 0, Math.PI * 2); ctx.fill();
+
+    const flash = this.invuln > 0 && Math.floor(this.invuln * 12) % 2 === 0;
+    const col = flash ? "#ffffff"
+      : this.state === CFG.STATE.ATTACK ? "#ff5252"
+      : this.state === CFG.STATE.WALK  ? "#42a5f5" : "#66bb6a";
+
+    const cy = s.y - R - 10 - bounce;                        // pusat kapsul
+    ctx.save();
+    ctx.translate(s.x, cy); ctx.rotate(this.facing);         // orientasi mengikuti facing
+    ctx.fillStyle = col;
+    ctx.beginPath(); ctx.arc(-R * 0.35, 0, R * 0.8, 0, Math.PI * 2); ctx.fill(); // ekor
+    ctx.beginPath(); ctx.arc(R * 0.35, 0, R * 0.62, 0, Math.PI * 2); ctx.fill(); // kepala
+    ctx.strokeStyle = col; ctx.lineWidth = R * 1.2; ctx.lineCap = "round";
+    ctx.beginPath(); ctx.moveTo(-R * 0.35, 0); ctx.lineTo(R * 0.35, 0); ctx.stroke();
+    ctx.fillStyle = "#fff";                                  // PANAH ARAH HADAP
+    ctx.beginPath(); ctx.moveTo(R * 1.35, 0); ctx.lineTo(R * 0.85, -7); ctx.lineTo(R * 0.85, 7); ctx.closePath(); ctx.fill();
+    ctx.restore();
+
+    // Efek busur tebasan / ring AoE selama animasi ATTACK
+    if (this.state === CFG.STATE.ATTACK) {
+      const dur = this.attackKind === "aoe" ? 0.45 : 0.35;
+      const p = 1 - this.attackT / dur;                      // progres 0..1
+      ctx.save(); ctx.translate(s.x, cy);
+      if (this.attackKind === "aoe") {
+        ctx.strokeStyle = `rgba(180,120,255,${1 - p})`;
+        ctx.lineWidth = 6; ctx.beginPath();
+        ctx.arc(0, 0, CFG.ATTACK_RANGE * 1.35 * p, 0, Math.PI * 2); ctx.stroke();
+      } else {
+        const a0 = this.facing - CFG.ATTACK_ARC / 2, a1 = this.facing + CFG.ATTACK_ARC / 2;
+        const sweep = a0 + (a1 - a0) * p;
+        ctx.strokeStyle = `rgba(255,255,255,${0.9 * (1 - p)})`;
+        ctx.fillStyle = `rgba(255,220,120,${0.25 * (1 - p)})`;
+        ctx.lineWidth = 5; ctx.lineCap = "round";
+        ctx.beginPath(); ctx.arc(0, 0, CFG.ATTACK_RANGE, sweep - 0.9, sweep); ctx.stroke();
+        ctx.beginPath(); ctx.moveTo(0, 0); ctx.arc(0, 0, CFG.ATTACK_RANGE, a0, sweep); ctx.closePath(); ctx.fill();
+      }
+      ctx.restore();
+    }
+    return s; // posisi layar, dipakai UI health bar dll.
+  }
+}
+
+/* ================================ ENEMY ================================= */
+/**
+ * Enemy — AI dasar peluru kendali: mengejar player jika dalam aggro range,
+ * menyerang jarak dekat dengan cooldown, punya health bar di atas kepala,
+ * dan mati (dengan animasi fade) saat HP habis.
+ */
+class Enemy {
+  constructor(x, y) {
+    this.pos = { x, y };
+    this.hp = 70; this.maxHp = 70;
+    this.alive = true; this.fade = 1;
+    this.atkCd = 0; this.flash = 0; this.wobble = Math.random() * 6.28;
+  }
+
+  takeDamage(d, game) {
+    if (!this.alive) return;
+    this.hp -= d; this.flash = 0.18;
+    game.spawnDamageText(toIso(this.pos.x, this.pos.y), d);
+    if (this.hp <= 0) { this.alive = false; game.kills++; }
+  }
+
+  update(dt, player, game) {
+    if (!this.alive) { this.fade = Math.max(0, this.fade - dt * 2); return; }
+    if (this.flash > 0) this.flash -= dt;
+    if (this.atkCd > 0) this.atkCd -= dt;
+    this.wobble += dt * 6;
+
+    const me = toIso(this.pos.x, this.pos.y);
+    const pp = toIso(player.pos.x, player.pos.y);
+    const d = Math.hypot(pp.x - me.x, pp.y - me.y);
+    const AGGRO = 300, TOUCH = 55;
+
+    if (d < AGGRO && d > TOUCH) {                            // kejar player
+      const dir = Math.atan2(pp.y - me.y, pp.x - me.x);
+      const wx = Math.cos(dir) * 0.7071 + Math.sin(dir) * 0.7071;
+      const wy = Math.sin(dir) * 0.7071 - Math.cos(dir) * 0.7071;
+      this.pos.x += wx * CFG.ENEMY_SPEED * dt * 64;
+      this.pos.y += wy * CFG.ENEMY_SPEED * dt * 64;
+      game.map.clampToWorld(this.pos);
+    } else if (d <= TOUCH && this.atkCd <= 0) {              // serang player
+      player.takeDamage(10);
+      this.atkCd = 1.2;
+      game.camera.shake = Math.max(game.camera.shake, 0.25);
+    }
+  }
+
+  draw(ctx, cam) {
+    const iso = toIso(this.pos.x, this.pos.y);
+    const s = cam.apply(iso.x, iso.y);
+    if (s.x < -80 || s.x > innerWidth + 80 || s.y < -120 || s.y > innerHeight + 120) return;
+    const R = CFG.ENEMY_R, wob = this.alive ? Math.sin(this.wobble) * 2 : 0;
+    ctx.globalAlpha = this.fade;
+
+    ctx.fillStyle = "rgba(0,0,0,0.4)";
+    ctx.beginPath(); ctx.ellipse(s.x, s.y + 3, R, R * 0.5, 0, 0, Math.PI * 2); ctx.fill();
+
+    const bodyCol = !this.alive ? "#555" : this.flash > 0 ? "#ffffff" : "#e53935";
+    ctx.fillStyle = bodyCol;                                 // badan bulat monster
+    ctx.beginPath(); ctx.arc(s.x, s.y - R - 8 + wob, R, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = "#ffcdd2";                               // mata
+    ctx.beginPath(); ctx.arc(s.x - 5, s.y - R - 11 + wob, 2.5, 0, Math.PI * 2); ctx.fill();
+    ctx.beginPath(); ctx.arc(s.x + 5, s.y - R - 11 + wob, 2.5, 0, Math.PI * 2); ctx.fill();
+
+    if (this.alive) {                                        // HEALTH BAR DI ATAS KEPALA
+      const bw = 36, bh = 5, bx = s.x - bw / 2, by = s.y - R * 2 - 22;
+      ctx.fillStyle = "rgba(0,0,0,0.6)"; ctx.fillRect(bx - 1, by - 1, bw + 2, bh + 2);
+      ctx.fillStyle = "#c62828"; ctx.fillRect(bx, by, bw, bh);
+      ctx.fillStyle = "#4caf50"; ctx.fillRect(bx, by, bw * clamp(this.hp / this.maxHp, 0, 1), bh);
+    }
+    ctx.globalAlpha = 1;
+  }
+}
+
+/* ============================== MOBILE UI =============================== */
+/**
+ * MobileUI — overlay HUD: HP/MP bar kiri atas, virtual joystick responsif
+ * (muncul di titik sentuh kiri-bawah), tombol Attack & Skill kanan bawah.
+ * Digambar langsung di canvas sehingga tetap terlihat di tab preview mobile.
+ */
+class MobileUI {
+  constructor(input) {
+    this.input = input;
+    this.btnAttack = { type: "attack", label: "⚔", color: "#ff7043", r: 34, pressed: false, justPressed: false };
+    this.btnSkill  = { type: "skill",  label: "✦", color: "#ab47bc", r: 28, pressed: false, justPressed: false };
+    input.uiButtons.push(this.btnAttack, this.btnSkill);
+  }
+  layout() {
+    const small = innerWidth < 720;
+    this.btnAttack.x = innerWidth - (small ? 70 : 90); this.btnAttack.y = innerHeight - (small ? 80 : 100);
+    this.btnSkill.x  = this.btnAttack.x - (small ? 78 : 100); this.btnSkill.y = innerHeight - (small ? 55 : 60);
+  }
+  /** Render HUD penuh (dipanggil tiap frame setelah dunia digambar). */
+  draw(ctx, player) {
+    this.layout();
+    // --- HP / MP bar kiri atas ---
+    const bx = 16, by = 16, bw = 180, bh = 16;
+    ctx.font = "bold 11px Segoe UI, Arial";
+    ctx.textBaseline = "middle";
+    this._bar(ctx, bx, by, bw, bh, player.hp / player.maxHp, "#43a047", `HP ${Math.ceil(player.hp)}/${player.maxHp}`);
+    this._bar(ctx, bx, by + 22, bw, bh, player.mp / player.maxMp, "#1e88e5", `MP ${Math.floor(player.mp)}/${player.maxMp}`);
+
+    // --- Virtual joystick (aktif saat disentuh, atau placeholder pasif) ---
+    const j = this.input.joystick;
+    const baseX = j.active ? j.ox : 110, baseY = j.active ? j.oy : innerHeight - 110;
+    ctx.globalAlpha = j.active ? 0.55 : 0.25;
+    ctx.strokeStyle = "#cfd6ff"; ctx.lineWidth = 3;
+    ctx.beginPath(); ctx.arc(baseX, baseY, 60, 0, Math.PI * 2); ctx.stroke();
+    ctx.fillStyle = "rgba(207,214,255,0.35)";
+    ctx.beginPath(); ctx.arc(baseX + j.vx * 60, baseY + j.vy * 60, 26, 0, Math.PI * 2); ctx.fill();
+    ctx.globalAlpha = 1;
+
+    // --- Tombol Attack & Skill ---
+    for (const b of [this.btnAttack, this.btnSkill]) {
+      ctx.globalAlpha = b.pressed ? 0.6 : 0.85;
+      ctx.fillStyle = b.color;
+      ctx.beginPath(); ctx.arc(b.x, b.y, b.r, 0, Math.PI * 2); ctx.fill();
+      ctx.strokeStyle = "#fff"; ctx.lineWidth = 2; ctx.stroke();
+      ctx.globalAlpha = 1;
+      ctx.fillStyle = "#fff"; ctx.font = `bold ${b.r}px Segoe UI, Arial`;
+      ctx.textAlign = "center";
+      ctx.fillText(b.label, b.x, b.y + 2);
+    }
+    ctx.textAlign = "left";
+  }
+  _bar(ctx, x, y, w, h, ratio, color, text) {
+    ctx.fillStyle = "rgba(0,0,0,0.55)"; ctx.fillRect(x - 2, y - 2, w + 4, h + 4);
+    ctx.fillStyle = "#333"; ctx.fillRect(x, y, w, h);
+    ctx.fillStyle = color; ctx.fillRect(x, y, w * clamp(ratio, 0, 1), h);
+    ctx.fillStyle = "#fff"; ctx.fillText(text, x + 6, y + h / 2 + 1);
+  }
+}
+
+/* ================================ GAME ================================== */
+/** Game — orkestrasi utama: init dunia, loop requestAnimationFrame, render. */
+class Game {
+  constructor() {
+    this.canvas = document.getElementById("game");
+    this.ctx = this.canvas.getContext("2d");
+    this._resize(); window.addEventListener("resize", () => this._resize());
+
+    this.map = new IsometricMap(CFG.MAP_SIZE);
+    this.camera = new Camera();
+    this.input = new InputHandler(this.canvas);
+    this.ui = new MobileUI(this.input);
+
+    const c = CFG.MAP_SIZE * 32;                             // tengah peta dunia
+    this.player = new Player(c, c);
+    this.camera.x = toIso(c, c).x; this.camera.y = toIso(c, c).y;
+
+    this.enemies = []; this.damageTexts = []; this.kills = 0;
+    for (let i = 0; i < CFG.ENEMY_COUNT; i++) {              // 3 musuh tersebar
+      const ex = c + (i - 1) * 260 + (Math.random() * 80 - 40);
+      const ey = c + (i % 2 ? 220 : -220) + (Math.random() * 80 - 40);
+      this.enemies.push(new Enemy(ex, ey));
+    }
+    this.last = performance.now();
+    requestAnimationFrame((t) => this.loop(t));
+  }
+
+  _resize() { this.canvas.width = innerWidth; this.canvas.height = innerHeight; }
+
+  /** Teks damage melayang (feedback visual saat mengenai musuh). */
+  spawnDamageText(isoPos, amount) {
+    this.damageTexts.push({ x: isoPos.x, y: isoPos.y - 40, life: 0.9, text: "-" + amount });
+  }
+
+  loop(now) {
+    const dt = Math.min((now - this.last) / 1000, 0.05);     // delta-time aman tab-switch
+    this.last = now;
+
+    /* ----- UPDATE ----- */
+    this.input.update();
+    this.player.update(dt, this.input, this);
+    for (const e of this.enemies) e.update(dt, this.player, this);
+    this.enemies = this.enemies.filter(e => e.alive || e.fade > 0);
+    for (const d of this.damageTexts) { d.life -= dt; d.y -= dt * 40; }
+    this.damageTexts = this.damageTexts.filter(d => d.life > 0);
+    this.camera.follow(toIso(this.player.pos.x, this.player.pos.y), dt);
+
+    // Respawn pemain & musuh saat semua musuh mati atau HP habis (loop demo)
+    if (this.enemies.length === 0) {
+      this.kills = 0;
+      for (let i = 0; i < CFG.ENEMY_COUNT; i++)
+        this.enemies.push(new Enemy(this.player.pos.x + (i - 1) * 280, this.player.pos.y + (i % 2 ? 240 : -240)));
+    }
+    if (this.player.hp <= 0) { this.player.hp = this.player.maxHp; this.player.mp = this.player.maxMp; }
+
+    /* ----- RENDER ----- */
+    const ctx = this.ctx;
+    ctx.fillStyle = "#0d0f1a"; ctx.fillRect(0, 0, innerWidth, innerHeight);
+    this.map.draw(ctx, this.camera);
+
+    // Urutan gambar berdasar kedalaman iso (y layar makin besar = makin depan)
+    const scene = [...this.enemies, this.player];
+    scene.sort((a, b) => (a.pos.x + a.pos.y) - (b.pos.x + b.pos.y));
+    for (const o of scene) o.draw(ctx, this.camera);
+
+    // Teks damage melayang
+    ctx.font = "bold 16px Segoe UI, Arial"; ctx.textAlign = "center";
+    for (const d of this.damageTexts) {
+      const s = this.camera.apply(d.x, d.y);
+      ctx.globalAlpha = clamp(d.life / 0.9, 0, 1);
+      ctx.fillStyle = "#ffe082"; ctx.fillText(d.text, s.x, s.y);
+      ctx.globalAlpha = 1;
+    }
+    ctx.textAlign = "left";
+
+    this.ui.draw(ctx, this.player);
+
+    // Info kill & state (kanan atas)
+    ctx.fillStyle = "rgba(207,214,255,0.9)"; ctx.font = "12px Segoe UI, Arial";
+    ctx.textAlign = "right";
+    ctx.fillText(`State: ${this.player.state}  •  Kills: ${this.kills}`, innerWidth - 14, 22);
+    ctx.textAlign = "left";
+
+    requestAnimationFrame((t) => this.loop(t));
+  }
+}
+
+/* Bootstrap — instance disimpan di window.game agar mudah di-debug/dites. */
+window.game = new Game();
+</script>
+</body>
+</html>
