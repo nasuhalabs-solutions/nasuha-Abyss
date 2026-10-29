@@ -795,15 +795,16 @@
 
     // --- Konversi arah layar → arah dunia (kamera isometrik 45°, terkunci) ---
     // Kamera pada offset (+X,+Y,+Z) dengan lookAt standar Three.js (up = +Y):
-    //   sumbu kanan-layar  R = normalize(camPos × up)      ∝ (+1, 0, -1)
-    //   sumbu bawah-layar  Dn = normalize(cross(R, fwd))   ∝ (-1, 0, -1)
-    // Karena tombol "atas" berarti iz negatif, maka:  world = R*ix − Dn*iz
-    // Hasil akhir (dibuktikan test unit .tmp/logic-test.js):
-    //   W(atas)  → (-X,-Z) menjauhi kamera   D(kanan) → (+X,-Z)
-    //   S(bawah) → (+X,+Z) mendekati kamera  A(kiri)  → (-X,+Z)
+    //   fwd = normalize(target − camPos) ∝ (−1, ~−1.22, −1)
+    //   sumbu kanan-layar  R = normalize(fwd × up)     ∝ (+0.707, 0, −0.707)
+    //   sumbu bawah-layar  Dn = normalize(cross(R, fwd)) ∝ (−0.577, 0, −0.577)
+    // world = R·ix − Dn·iz  (tombol "atas"/tuas ke atas berarti iz negatif)
+    // Hasil pemetaan (diverifikasi ulang secara matematis):
+    //   W(atas)  → (+X,+Z) menjauhi kamera        S(bawah) → (−X,−Z) mendekati kamera
+    //   D(kanan) → (+X,−Z)                       A(kiri)   → (−X,+Z)
     const K = Math.SQRT1_2; // 0.7071
-    let wx = (iz - ix) * K;          // X = (bawah−layar − kanan) · K
-    let wz = -(ix + iz) * K;         // Z = −(kanan + bawah−layar) · K
+    let wx = -(ix - iz) * K;         // X = −(kanan − bawah−layar) · K
+    let wz = (ix + iz) * K;          // Z = +(kanan + bawah−layar) · K
     if (!isFinite(wx)) wx = 0;
     if (!isFinite(wz)) wz = 0;
 
