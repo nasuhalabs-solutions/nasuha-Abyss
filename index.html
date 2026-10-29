@@ -1,0 +1,999 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+<title>Dungeon Hunter 2.5D — Tahap 1 (Prototype)</title>
+<style>
+  :root {
+    --hud-accent: #ffb347;
+    --hud-dark: rgba(10, 8, 16, 0.72);
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  html, body {
+    width: 100%;
+    height: 100%;
+    overflow: hidden;
+    background: #05040a;
+    font-family: "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    touch-action: none;
+    -webkit-user-select: none;
+    user-select: none;
+    overscroll-behavior: none;
+  }
+
+  #app { position: fixed; inset: 0; }
+  canvas { display: block; }
+
+  /* ---------- HUD atas ---------- */
+  #hud-top {
+    position: fixed;
+    top: 12px;
+    left: 12px;
+    right: 12px;
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    pointer-events: none;
+    z-index: 20;
+  }
+
+  .panel {
+    background: var(--hud-dark);
+    border: 1px solid rgba(255, 179, 71, 0.35);
+    border-radius: 10px;
+    padding: 8px 12px;
+    color: #f2ead9;
+    box-shadow: 0 4px 18px rgba(0,0,0,.5);
+    backdrop-filter: blur(3px);
+  }
+
+  #player-info .title {
+    font-size: 13px;
+    letter-spacing: 2px;
+    text-transform: uppercase;
+    color: var(--hud-accent);
+    margin-bottom: 6px;
+  }
+
+  .bar {
+    width: 190px;
+    height: 10px;
+    border-radius: 6px;
+    background: rgba(255,255,255,.09);
+    overflow: hidden;
+    border: 1px solid rgba(255,255,255,.14);
+  }
+  .bar > i { display:block; height:100%; width:100%; transition: width .15s linear; }
+  #hp-fill { background: linear-gradient(90deg,#ff4d4d,#ff8a5c); }
+  #stam-fill { background: linear-gradient(90deg,#3ddc97,#a6ffdd); margin-top:4px; }
+
+  .bar-label {
+    font-size: 10px;
+    opacity: .7;
+    margin: 4px 0 2px;
+    letter-spacing: 1px;
+  }
+
+  #debug-info {
+    font-size: 11px;
+    line-height: 1.5;
+    text-align: right;
+    min-width: 148px;
+  }
+  #debug-info b { color: var(--hud-accent); font-weight: 600; }
+
+  /* ---------- Joystick virtual ---------- */
+  #joystick-zone {
+    position: fixed;
+    left: 0;
+    bottom: 0;
+    width: 55%;
+    height: 55%;
+    z-index: 15;
+    pointer-events: none;
+  }
+
+  #joy-base {
+    position: absolute;
+    width: 132px;
+    height: 132px;
+    border-radius: 50%;
+    background: radial-gradient(circle at 50% 50%, rgba(255,255,255,.10), rgba(255,255,255,.03) 70%);
+    border: 2px solid rgba(255, 179, 71, 0.45);
+    box-shadow: 0 0 22px rgba(0,0,0,.55), inset 0 0 18px rgba(0,0,0,.45);
+    transform: translate(-50%, -50%);
+    pointer-events: auto;
+    opacity: .92;
+    transition: opacity .2s;
+  }
+
+  #joy-stick {
+    position: absolute;
+    width: 58px;
+    height: 58px;
+    border-radius: 50%;
+    background: radial-gradient(circle at 35% 30%, #ffe1a8, #d78b2c 60%, #7c4a10);
+    border: 1px solid rgba(255,255,255,.35);
+    box-shadow: 0 4px 12px rgba(0,0,0,.6);
+    transform: translate(-50%, -50%);
+    pointer-events: none;
+  }
+
+  /* Tombol aksi (dekoratif untuk tahap 1) */
+  #action-buttons {
+    position: fixed;
+    right: 18px;
+    bottom: 26px;
+    display: flex;
+    gap: 14px;
+    z-index: 15;
+  }
+  .btn-orb {
+    width: 66px;
+    height: 66px;
+    border-radius: 50%;
+    display: grid;
+    place-items: center;
+    font-size: 11px;
+    letter-spacing: 1px;
+    color: #1b1206;
+    font-weight: 700;
+    background: radial-gradient(circle at 35% 30%, #ffd98a, #e08c23 65%, #8a4f0d);
+    border: 2px solid rgba(255,255,255,.35);
+    box-shadow: 0 5px 16px rgba(0,0,0,.55);
+    pointer-events: auto;
+    cursor: pointer;
+    opacity: .85;
+  }
+  .btn-orb.small { width: 52px; height: 52px; background: radial-gradient(circle at 35% 30%, #9fd8ff, #2f7fb8 65%, #123a55); color:#eaf6ff; }
+
+  /* ---------- Overlay petunjuk ---------- */
+  #hint {
+    position: fixed;
+    bottom: 10px;
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 18;
+    font-size: 11px;
+    color: #cfc6b4;
+    background: var(--hud-dark);
+    border: 1px solid rgba(255,255,255,.12);
+    padding: 6px 12px;
+    border-radius: 20px;
+    white-space: nowrap;
+    pointer-events: none;
+  }
+  #hint kbd {
+    background: #2a2438;
+    border: 1px solid #4b4460;
+    border-bottom-width: 2px;
+    border-radius: 4px;
+    padding: 0 5px;
+    font-size: 10px;
+    color: #ffe6b8;
+  }
+
+  #loading {
+    position: fixed;
+    inset: 0;
+    display: grid;
+    place-items: center;
+    background: #05040a;
+    color: var(--hud-accent);
+    letter-spacing: 3px;
+    font-size: 14px;
+    text-transform: uppercase;
+    z-index: 50;
+    transition: opacity .5s;
+  }
+  #loading.hide { opacity: 0; pointer-events: none; }
+
+  @media (max-width: 620px) {
+    #debug-info { display:none; }
+    .bar { width: 140px; }
+    #hint { font-size: 10px; white-space: normal; text-align:center; max-width: 90%; }
+  }
+</style>
+</head>
+<body>
+<div id="app"></div>
+
+<div id="loading">Memasuki Ruang Bawah Tanah…</div>
+
+<div id="hud-top">
+  <div class="panel" id="player-info">
+    <div class="title">Pemburu &nbsp;•&nbsp; Lv. 1</div>
+    <div class="bar"><i id="hp-fill"></i></div>
+    <div class="bar-label">HP <span id="hp-text">100 / 100</span></div>
+    <div class="bar"><i id="stam-fill"></i></div>
+    <div class="bar-label">STAMINA</div>
+  </div>
+
+  <div class="panel" id="debug-info">
+    FPS: <b id="fps">--</b><br/>
+    Posisi: <b id="pos">0, 0</b><br/>
+    Menghadap: <b id="facing">--</b><br/>
+    Kecepatan: <b id="speed">0.0</b>
+  </div>
+</div>
+
+<div id="joystick-zone">
+  <div id="joy-base"><div id="joy-stick"></div></div>
+</div>
+
+<div id="action-buttons">
+  <div class="btn-orb small">ROLL</div>
+  <div class="btn-orb">SERANG</div>
+</div>
+
+<div id="hint">
+  Gerak: <kbd>W A S D</kbd> / <kbd>↑ ← ↓ →</kbd> &nbsp;•&nbsp; Sprint: <kbd>Shift</kbd> &nbsp;•&nbsp; Reset: <kbd>R</kbd> &nbsp;•&nbsp; HP/Touch: pakai joystick kiri
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/three@0.152.2/build/three.min.js"></script>
+<script>
+/* =====================================================================
+   DUNGEON HUNTER 2.5D — TAHAP 1 (Prototipe Gerak + Kamera Isometrik)
+   Semua logika dalam satu file. Tidak ada dependensi selain Three.js CDN.
+   ===================================================================== */
+(function () {
+  'use strict';
+
+  if (!window.THREE) {
+    document.getElementById('loading').textContent =
+      'Gagal memuat Three.js dari CDN — periksa koneksi internet.';
+    return;
+  }
+
+  // ------------------------------------------------------------------
+  // Konfigurasi global
+  // ------------------------------------------------------------------
+  const CFG = {
+    ARENA_SIZE   : 46,          // ukuran arena (unit dunia)
+    GRID_DIV     : 23,          // jumlah petak grid lantai
+    WALL_HEIGHT  : 3.4,
+    CAM_OFFSET   : new THREE.Vector3(18, 22, 18), // sudut isometrik terkunci
+    CAM_LERP     : 6.5,         // kehalusan mengikuti pemain (per detik)
+    LOOK_LERP    : 8.0,
+    SPEED_WALK   : 7.2,
+    SPEED_RUN    : 11.5,
+    ACCEL        : 14,          // percepatan (unit/detik^2)
+    DECEL        : 18,
+    TURN_LERP    : 16,
+    BOB_FREQ     : 9.5,
+    PLAYER_RADIUS: 0.75,
+    PILLAR_COUNT : 10,
+  };
+
+  const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+  const rand  = (a, b) => a + Math.random() * (b - a);
+
+  // ------------------------------------------------------------------
+  // Renderer / Scene / Camera
+  // ------------------------------------------------------------------
+  const container = document.getElementById('app');
+
+  const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+  renderer.setSize(window.innerWidth, window.innerHeight);
+  renderer.shadowMap.enabled = true;
+  renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+  // r152 memakai .outputColorSpace (fallback untuk build lama)
+  if ('outputColorSpace' in renderer) renderer.outputColorSpace = THREE.SRGBColorSpace;
+  else renderer.outputEncoding = THREE.sRGBEncoding;
+  renderer.toneMapping = THREE.ACESFilmicToneMapping;
+  renderer.toneMappingExposure = 1.05;
+  container.appendChild(renderer.domElement);
+
+  const scene = new THREE.Scene();
+  scene.background = new THREE.Color(0x07060d);
+  scene.fog = new THREE.Fog(0x07060d, 34, 78);
+
+  const camera = new THREE.PerspectiveCamera(
+    42, window.innerWidth / window.innerHeight, 0.1, 220
+  );
+  camera.position.copy(CFG.CAM_OFFSET);
+  camera.lookAt(0, 1, 0);
+
+  // ------------------------------------------------------------------
+  // Tekstur prosedural (canvas) — lantai berpola gelap & batu pilar
+  // ------------------------------------------------------------------
+  function makeCanvas(size, draw) {
+    const c = document.createElement('canvas');
+    c.width = c.height = size;
+    const ctx = c.getContext('2d');
+    draw(ctx, size);
+    const tex = new THREE.CanvasTexture(c);
+    tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+    tex.anisotropy = renderer.capabilities.getMaxAnisotropy();
+    return tex;
+  }
+
+  // Lantai: ubin batu gelap dengan nat grid + noise
+  const floorTex = makeCanvas(512, (ctx, s) => {
+    ctx.fillStyle = '#171522';
+    ctx.fillRect(0, 0, s, s);
+
+    const cells = 4, cw = s / cells;
+    for (let y = 0; y < cells; y++) {
+      for (let x = 0; x < cells; x++) {
+        const g = 22 + Math.floor(Math.random() * 20);
+        ctx.fillStyle = `rgb(${g - 4}, ${g - 6}, ${g + 12})`;
+        ctx.fillRect(x * cw + 3, y * cw + 3, cw - 6, cw - 6);
+
+        // highlight tipis di tepi atas-kiri
+        ctx.strokeStyle = 'rgba(255,255,255,0.05)';
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.moveTo(x * cw + 4, y * cw + cw - 4);
+        ctx.lineTo(x * cw + 4, y * cw + 4);
+        ctx.lineTo(x * cw + cw - 4, y * cw + 4);
+        ctx.stroke();
+      }
+    }
+
+    // noise kerikil
+    for (let i = 0; i < 5200; i++) {
+      const px = Math.random() * s, py = Math.random() * s;
+      const a = Math.random() * 0.14;
+      ctx.fillStyle = Math.random() > 0.5
+        ? `rgba(255,255,255,${a})`
+        : `rgba(0,0,0,${a * 2})`;
+      ctx.fillRect(px, py, 1.6, 1.6);
+    }
+
+    // retakan dekoratif
+    ctx.strokeStyle = 'rgba(0,0,0,0.55)';
+    ctx.lineWidth = 1.4;
+    for (let i = 0; i < 14; i++) {
+      let px = Math.random() * s, py = Math.random() * s;
+      ctx.beginPath();
+      ctx.moveTo(px, py);
+      for (let j = 0; j < 5; j++) {
+        px += rand(-34, 34);
+        py += rand(-34, 34);
+        ctx.lineTo(px, py);
+      }
+      ctx.stroke();
+    }
+
+    // garis nat utama
+    ctx.strokeStyle = 'rgba(0,0,0,0.75)';
+    ctx.lineWidth = 5;
+    for (let i = 0; i <= cells; i++) {
+      ctx.beginPath(); ctx.moveTo(i * cw, 0); ctx.lineTo(i * cw, s); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(0, i * cw); ctx.lineTo(s, i * cw); ctx.stroke();
+    }
+  });
+  floorTex.repeat.set(CFG.GRID_DIV / 2, CFG.GRID_DIV / 2);
+
+  // Batu pilar
+  const stoneTex = makeCanvas(256, (ctx, s) => {
+    ctx.fillStyle = '#2b2736';
+    ctx.fillRect(0, 0, s, s);
+    const rows = 8, rh = s / rows;
+    for (let r = 0; r < rows; r++) {
+      const off = (r % 2) * (s / 8);
+      for (let c = 0; c < 4; c++) {
+        const g = 40 + Math.floor(Math.random() * 26);
+        ctx.fillStyle = `rgb(${g}, ${g - 3}, ${g + 9})`;
+        ctx.fillRect(off + c * (s / 4) + 2, r * rh + 2, s / 4 - 4, rh - 4);
+      }
+    }
+    for (let i = 0; i < 2600; i++) {
+      ctx.fillStyle = `rgba(0,0,0,${Math.random() * 0.22})`;
+      ctx.fillRect(Math.random() * s, Math.random() * s, 2, 2);
+    }
+    ctx.strokeStyle = 'rgba(0,0,0,0.6)';
+    ctx.lineWidth = 3;
+    for (let r = 0; r <= rows; r++) {
+      ctx.beginPath(); ctx.moveTo(0, r * rh); ctx.lineTo(s, r * rh); ctx.stroke();
+    }
+  });
+  stoneTex.repeat.set(2, 2);
+
+  // ------------------------------------------------------------------
+  // Pencahayaan khas dungeon
+  // ------------------------------------------------------------------
+  scene.add(new THREE.HemisphereLight(0x5a6a9c, 0x120f18, 0.55));
+
+  const ambient = new THREE.AmbientLight(0x2a2440, 0.6);
+  scene.add(ambient);
+
+  // Cahaya utama (memakai shadow map) dari arah kamera-ish
+  const keyLight = new THREE.DirectionalLight(0xffd9a0, 1.15);
+  keyLight.position.set(14, 26, 10);
+  keyLight.castShadow = true;
+  keyLight.shadow.mapSize.set(2048, 2048);
+  keyLight.shadow.camera.near = 1;
+  keyLight.shadow.camera.far = 90;
+  const sd = 34;
+  keyLight.shadow.camera.left = -sd;
+  keyLight.shadow.camera.right = sd;
+  keyLight.shadow.camera.top = sd;
+  keyLight.shadow.camera.bottom = -sd;
+  keyLight.shadow.bias = -0.0006;
+  scene.add(keyLight);
+  scene.add(keyLight.target);
+
+  // Obor: titik-titik cahaya berkedip
+  const torches = [];
+  function addTorch(x, z, color = 0xff8a3d, intensity = 2.2, dist = 16) {
+    const light = new THREE.PointLight(color, intensity, dist, 2);
+    light.position.set(x, 2.4, z);
+    scene.add(light);
+
+    const flameGeo = new THREE.SphereGeometry(0.17, 8, 8);
+    const flameMat = new THREE.MeshBasicMaterial({ color: color });
+    const flame = new THREE.Mesh(flameGeo, flameMat);
+    flame.position.set(x, 2.55, z);
+    scene.add(flame);
+
+    torches.push({ light, flame, base: intensity, phase: Math.random() * 10 });
+  }
+
+  // ------------------------------------------------------------------
+  // Lantai + grid
+  // ------------------------------------------------------------------
+  const floorMat = new THREE.MeshStandardMaterial({
+    map: floorTex, roughness: 0.95, metalness: 0.05, color: 0xb9b4c9
+  });
+  const floor = new THREE.Mesh(
+    new THREE.PlaneGeometry(CFG.ARENA_SIZE, CFG.ARENA_SIZE),
+    floorMat
+  );
+  floor.rotation.x = -Math.PI / 2;
+  floor.receiveShadow = true;
+  scene.add(floor);
+
+  // Grid helper tipis agar terbaca sebagai arena 2.5D
+  const grid = new THREE.GridHelper(CFG.ARENA_SIZE, CFG.GRID_DIV, 0x6f5b3a, 0x2e2a3d);
+  grid.material.transparent = true;
+  grid.material.opacity = 0.32;
+  grid.position.y = 0.02;
+  scene.add(grid);
+
+  // Alas gelap di luar arena
+  const voidPlane = new THREE.Mesh(
+    new THREE.PlaneGeometry(320, 320),
+    new THREE.MeshStandardMaterial({ color: 0x0b0a12, roughness: 1 })
+  );
+  voidPlane.rotation.x = -Math.PI / 2;
+  voidPlane.position.y = -0.6;
+  scene.add(voidPlane);
+
+  // ------------------------------------------------------------------
+  // Dinding pembatas arena
+  // ------------------------------------------------------------------
+  const obstacles = []; // {x, z, r} untuk tabrakan silinder sederhana
+  const half = CFG.ARENA_SIZE / 2;
+  const wallMat = new THREE.MeshStandardMaterial({
+    map: stoneTex, color: 0x8f8aa3, roughness: 0.9, metalness: 0.08
+  });
+
+  function addWall(w, d, x, z) {
+    const m = new THREE.Mesh(new THREE.BoxGeometry(w, CFG.WALL_HEIGHT, d), wallMat);
+    m.position.set(x, CFG.WALL_HEIGHT / 2, z);
+    m.castShadow = true;
+    m.receiveShadow = true;
+    scene.add(m);
+  }
+  addWall(CFG.ARENA_SIZE, 1, 0, -half);
+  addWall(CFG.ARENA_SIZE, 1, 0,  half);
+  addWall(1, CFG.ARENA_SIZE, -half, 0);
+  addWall(1, CFG.ARENA_SIZE,  half, 0);
+
+  // ------------------------------------------------------------------
+  // Pilar-pilar 3D
+  // ------------------------------------------------------------------
+  const pillarMat = new THREE.MeshStandardMaterial({
+    map: stoneTex, color: 0xa79fbe, roughness: 0.82, metalness: 0.1
+  });
+  const capMat = new THREE.MeshStandardMaterial({ color: 0x3c3650, roughness: 0.7, metalness: 0.25 });
+
+  function addPillar(x, z, h, r) {
+    const grp = new THREE.Group();
+
+    const shaft = new THREE.Mesh(new THREE.CylinderGeometry(r, r * 1.08, h, 14), pillarMat);
+    shaft.position.y = h / 2;
+    shaft.castShadow = shaft.receiveShadow = true;
+    grp.add(shaft);
+
+    const base = new THREE.Mesh(new THREE.CylinderGeometry(r * 1.35, r * 1.5, 0.5, 14), capMat);
+    base.position.y = 0.25;
+    base.castShadow = base.receiveShadow = true;
+    grp.add(base);
+
+    const cap = new THREE.Mesh(new THREE.CylinderGeometry(r * 1.4, r * 1.1, 0.55, 14), capMat);
+    cap.position.y = h + 0.25;
+    cap.castShadow = cap.receiveShadow = true;
+    grp.add(cap);
+
+    // puing kecil di sekitar pangkal
+    for (let i = 0; i < 3; i++) {
+      const deb = new THREE.Mesh(
+        new THREE.BoxGeometry(rand(0.2, 0.45), rand(0.15, 0.3), rand(0.2, 0.45)),
+        capMat
+      );
+      deb.position.set(rand(-1.4, 1.4), 0.12, rand(-1.4, 1.4));
+      deb.rotation.y = Math.random() * Math.PI;
+      deb.castShadow = true;
+      grp.add(deb);
+    }
+
+    grp.position.set(x, 0, z);
+    scene.add(grp);
+    obstacles.push({ x, z, r: r * 1.55 + 0.25 });
+    return grp;
+  }
+
+  // Pilar simetris ala gerbang dungeon
+  const layout = [
+    [-10, -10, 6.2, 1.0], [ 10, -10, 6.2, 1.0],
+    [-10,  10, 6.2, 1.0], [ 10,  10, 6.2, 1.0],
+    [-16,   0, 4.6, 0.85], [ 16,   0, 4.6, 0.85],
+    [  0, -16, 5.4, 0.9 ], [  0,  16, 5.4, 0.9 ],
+    [ -5,   5, 3.2, 0.6 ], [  6,  -4, 3.6, 0.65],
+  ];
+  layout.forEach(p => addPillar(p[0], p[1], p[2], p[3]));
+
+  // Beberapa pilar roboh pendek (halangan rendah)
+  for (let i = 0; i < CFG.PILLAR_COUNT - layout.length; i++) {
+    const ang = Math.random() * Math.PI * 2;
+    const rad = rand(6, half - 4);
+    addPillar(Math.cos(ang) * rad, Math.sin(ang) * rad, rand(1.2, 2.2), rand(0.5, 0.75));
+  }
+
+  // Obor di sudut-sudut & dekat tengah
+  addTorch(-half + 2.2, -half + 2.2);
+  addTorch( half - 2.2, -half + 2.2);
+  addTorch(-half + 2.2,  half - 2.2);
+  addTorch( half - 2.2,  half - 2.2);
+  addTorch(-6, 6, 0xffb066, 1.6, 13);
+  addTorch(6, -6, 0xffb066, 1.6, 13);
+
+  // ------------------------------------------------------------------
+  // Karakter utama (kapsul + penanda arah depan)
+  // ------------------------------------------------------------------
+  const player = new THREE.Group();
+  scene.add(player);
+
+  const bodyMat = new THREE.MeshStandardMaterial({ color: 0x2f6df0, roughness: 0.55, metalness: 0.25 });
+  const trimMat = new THREE.MeshStandardMaterial({ color: 0xf1c40f, roughness: 0.4, metalness: 0.5 });
+  const darkMat = new THREE.MeshStandardMaterial({ color: 0x1a1a26, roughness: 0.8 });
+
+  const capsule = new THREE.Mesh(new THREE.CapsuleGeometry(0.55, 0.85, 8, 18), bodyMat);
+  capsule.position.y = 1.15;
+  capsule.castShadow = true;
+  player.add(capsule);
+
+  // "kepala"/tudung
+  const hood = new THREE.Mesh(new THREE.SphereGeometry(0.42, 16, 14, 0, Math.PI * 2, 0, Math.PI * 0.62), darkMat);
+  hood.position.y = 1.95;
+  hood.castShadow = true;
+  player.add(hood);
+
+  // Ikat pinggang
+  const belt = new THREE.Mesh(new THREE.TorusGeometry(0.56, 0.08, 8, 20), trimMat);
+  belt.rotation.x = Math.PI / 2;
+  belt.position.y = 1.05;
+  belt.castShadow = true;
+  player.add(belt);
+
+  // PENANDA ARAH DEPAN: hidung kerucut + pedang pendek di sisi kanan
+  const nose = new THREE.Mesh(new THREE.ConeGeometry(0.22, 0.5, 12), trimMat);
+  nose.rotation.x = Math.PI / 2;         // kerucut menghadap +Z lokal
+  nose.position.set(0, 1.55, 0.62);
+  nose.castShadow = true;
+  player.add(nose);
+
+  const visor = new THREE.Mesh(new THREE.BoxGeometry(0.42, 0.1, 0.06), trimMat);
+  visor.position.set(0, 1.92, 0.38);
+  player.add(visor);
+
+  const sword = new THREE.Group();
+  const blade = new THREE.Mesh(new THREE.BoxGeometry(0.1, 1.15, 0.03),
+    new THREE.MeshStandardMaterial({ color: 0xdfe6ee, metalness: 0.9, roughness: 0.25 }));
+  blade.position.y = 0.55;
+  blade.castShadow = true;
+  const guard = new THREE.Mesh(new THREE.BoxGeometry(0.34, 0.09, 0.09), trimMat);
+  const grip = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.05, 0.3, 8), darkMat);
+  grip.position.y = -0.18;
+  sword.add(blade, guard, grip);
+  sword.position.set(0.62, 1.05, 0.25);
+  sword.rotation.set(-0.35, 0, -0.25);
+  player.add(sword);
+
+  // Lingkaran "shadow caster" halus di bawah kaki (fake AO)
+  const ringMat = new THREE.MeshBasicMaterial({ color: 0x000000, transparent: true, opacity: 0.35 });
+  const groundRing = new THREE.Mesh(new THREE.CircleGeometry(0.72, 24), ringMat);
+  groundRing.rotation.x = -Math.PI / 2;
+  groundRing.position.y = 0.03;
+  player.add(groundRing);
+
+  // Panah penanda arah di tanah (membaca orientasi dari kamera iso)
+  const dirArrow = new THREE.Mesh(
+    new THREE.ConeGeometry(0.3, 0.8, 4),
+    new THREE.MeshBasicMaterial({ color: 0xffb347, transparent: true, opacity: 0.55 })
+  );
+  dirArrow.rotation.x = -Math.PI / 2;
+  dirArrow.position.set(0, 0.06, 1.5);
+  player.add(dirArrow);
+
+  player.position.set(0, 0, 0);
+
+  // ------------------------------------------------------------------
+  // State pemain
+  // ------------------------------------------------------------------
+  const state = {
+    pos: new THREE.Vector3(0, 0, 0),
+    vel: new THREE.Vector3(0, 0, 0),
+    facing: 0,            // yaw (radian), 0 = menghadap +Z
+    moving: false,
+    sprint: false,
+    bobTime: 0,
+    hp: 100, maxHp: 100,
+    stamina: 100,
+  };
+
+  // ------------------------------------------------------------------
+  // INPUT — Keyboard WASD / Arrow keys
+  // ------------------------------------------------------------------
+  const keys = Object.create(null);
+  const KEYMAP = {
+    KeyW: 'up', ArrowUp: 'up',
+    KeyS: 'down', ArrowDown: 'down',
+    KeyA: 'left', ArrowLeft: 'left',
+    KeyD: 'right', ArrowRight: 'right',
+    ShiftLeft: 'sprint', ShiftRight: 'sprint',
+  };
+
+  window.addEventListener('keydown', (e) => {
+    const act = KEYMAP[e.code];
+    if (act) { keys[act] = true; e.preventDefault(); }
+    if (e.code === 'KeyR') resetPlayer();
+    if (e.code === 'Space') e.preventDefault();
+  }, { passive: false });
+
+  window.addEventListener('keyup', (e) => {
+    const act = KEYMAP[e.code];
+    if (act) { keys[act] = false; e.preventDefault(); }
+  }, { passive: false });
+
+  window.addEventListener('blur', () => { for (const k in keys) keys[k] = false; });
+
+  // ------------------------------------------------------------------
+  // INPUT — Joystick virtual (touch + mouse drag)
+  // ------------------------------------------------------------------
+  const joy = { active: false, id: null, cx: 0, cy: 0, dx: 0, dy: 0, mag: 0 };
+  const joyBase  = document.getElementById('joy-base');
+  const joyStick = document.getElementById('joy-stick');
+  const joyZone  = document.getElementById('joystick-zone');
+  const JOY_RADIUS = 52;              // px radius maksimum tuas
+  const BASE_DEFAULT = { left: 96, bottom: 96 };
+
+  function placeBase(px, py) {
+    joyBase.style.left = px + 'px';
+    joyBase.style.top  = py + 'px';
+    joyBase.style.bottom = 'auto';
+    joy.cx = px; joy.cy = py;
+  }
+  // posisi awal base
+  function anchorBase() {
+    const r = joyZone.getBoundingClientRect();
+    placeBase(r.left + BASE_DEFAULT.left, r.bottom - BASE_DEFAULT.bottom);
+  }
+  window.addEventListener('resize', anchorBase);
+  anchorBase();
+
+  function stickUpdate(dx, dy) {
+    const dist = Math.hypot(dx, dy);
+    const clamped = Math.min(dist, JOY_RADIUS);
+    const nx = dist > 0.0001 ? dx / dist : 0;
+    const ny = dist > 0.0001 ? dy / dist : 0;
+    // tuas bergeser maksimum ±37px dari tengah base (radius visual knob)
+    joyStick.style.left = 'calc(50% + ' + (nx * clamped * 0.71) + 'px)';
+    joyStick.style.top  = 'calc(50% + ' + (ny * clamped * 0.71) + 'px)';
+    joy.dx = nx * (clamped / JOY_RADIUS);
+    joy.dy = ny * (clamped / JOY_RADIUS);
+    joy.mag = clamped / JOY_RADIUS;
+  }
+  function stickReset() {
+    joyStick.style.left = '50%';
+    joyStick.style.top = '50%';
+    joy.dx = joy.dy = joy.mag = 0;
+    joy.active = false; joy.id = null;
+    anchorBase(); // tuas kembali ke anchor kiri-bawah
+  }
+
+  function onStart(x, y, id) {
+    joy.active = true; joy.id = id;
+    placeBase(x, y);
+    stickUpdate(0, 0);
+  }
+  function onMove(x, y) { stickUpdate(x - joy.cx, y - joy.cy); }
+
+  joyZone.style.pointerEvents = 'auto';
+
+  joyZone.addEventListener('touchstart', (e) => {
+    const t = e.changedTouches[0];
+    onStart(t.clientX, t.clientY, t.identifier);
+    e.preventDefault();
+  }, { passive: false });
+
+  joyZone.addEventListener('touchmove', (e) => {
+    for (const t of e.changedTouches) {
+      if (t.identifier === joy.id) onMove(t.clientX, t.clientY);
+    }
+    e.preventDefault();
+  }, { passive: false });
+
+  joyZone.addEventListener('touchend', (e) => {
+    for (const t of e.changedTouches) {
+      if (t.identifier === joy.id) stickReset();
+    }
+  });
+  joyZone.addEventListener('touchcancel', () => stickReset());
+
+  // fallback mouse (testing tanpa touch)
+  let mouseDrag = false;
+  joyZone.addEventListener('mousedown', (e) => {
+    mouseDrag = true; onStart(e.clientX, e.clientY, 'mouse');
+  });
+  window.addEventListener('mousemove', (e) => {
+    if (mouseDrag && joy.id === 'mouse') onMove(e.clientX, e.clientY);
+  });
+  window.addEventListener('mouseup', () => { if (mouseDrag) { mouseDrag = false; stickReset(); } });
+
+  // ------------------------------------------------------------------
+  // Tabrakan sederhana: dorong keluar dari silinder penghalang
+  // ------------------------------------------------------------------
+  const bounds = half - 1.15;
+  function resolveCollisions(p) {
+    // dinding arena
+    p.x = clamp(p.x, -bounds, bounds);
+    p.z = clamp(p.z, -bounds, bounds);
+
+    // pilar
+    for (let i = 0; i < obstacles.length; i++) {
+      const o = obstacles[i];
+      const dx = p.x - o.x, dz = p.z - o.z;
+      const d = Math.hypot(dx, dz);
+      const min = o.r + CFG.PLAYER_RADIUS;
+      if (d < min) {
+        if (d < 0.0001) { p.x = o.x + min; continue; }
+        const push = (min - d);
+        p.x += (dx / d) * push;
+        p.z += (dz / d) * push;
+      }
+    }
+  }
+
+  // ------------------------------------------------------------------
+  // Update pemain
+  // ------------------------------------------------------------------
+  const tmpDir = new THREE.Vector3();
+  function updatePlayer(dt) {
+    // --- input menjadi vektor arah layar (x, z) ---
+    let ix = 0, iz = 0;
+    if (keys.up)    iz -= 1;
+    if (keys.down)  iz += 1;
+    if (keys.left)  ix -= 1;
+    if (keys.right) ix += 1;
+
+    if (joy.active && joy.mag > 0.12) {
+      ix = joy.dx;
+      iz = joy.dy;      // y layar: bawah = +iz, sama seperti mapping keyboard
+    }
+
+    // Normalisasi ke panjang <= 1
+    let magnitude = Math.min(1, Math.hypot(ix, iz));
+    const hasInput = magnitude > 0.001;
+
+    // --- Konversi arah layar → arah dunia (kamera isometrik 45°, terkunci) ---
+    // Kamera pada offset (+X,+Y,+Z) dengan lookAt standar Three.js (up = +Y):
+    //   sumbu kanan-layar  R = normalize(camPos × up)      ∝ (+1, 0, -1)
+    //   sumbu bawah-layar  Dn = normalize(cross(R, fwd))   ∝ (-1, 0, -1)
+    // Karena tombol "atas" berarti iz negatif, maka:  world = R*ix − Dn*iz
+    // Hasil akhir (dibuktikan test unit .tmp/logic-test.js):
+    //   W(atas)  → (-X,-Z) menjauhi kamera   D(kanan) → (+X,-Z)
+    //   S(bawah) → (+X,+Z) mendekati kamera  A(kiri)  → (-X,+Z)
+    const K = Math.SQRT1_2; // 0.7071
+    let wx = (iz - ix) * K;          // X = (bawah−layar − kanan) · K
+    let wz = -(ix + iz) * K;         // Z = −(kanan + bawah−layar) · K
+    if (!isFinite(wx)) wx = 0;
+    if (!isFinite(wz)) wz = 0;
+
+    // Stamina untuk sprint
+    state.sprint = !!keys.sprint && hasInput && state.stamina > 1;
+    if (state.sprint) state.stamina = clamp(state.stamina - 34 * dt, 0, 100);
+    else state.stamina = clamp(state.stamina + 22 * dt, 0, 100);
+
+    const maxSpeed = (state.sprint ? CFG.SPEED_RUN : CFG.SPEED_WALK) * magnitude;
+
+    tmpDir.set(wx, 0, wz);
+    if (tmpDir.lengthSq() > 0.0001) tmpDir.normalize();
+
+    const accel = hasInput ? CFG.ACCEL : CFG.DECEL;
+    const desiredX = hasInput ? tmpDir.x * maxSpeed : 0;
+    const desiredZ = hasInput ? tmpDir.z * maxSpeed : 0;
+
+    state.vel.x += (desiredX - state.vel.x) * Math.min(1, accel * dt);
+    state.vel.z += (desiredZ - state.vel.z) * Math.min(1, accel * dt);
+
+    // hentikan jitter kecepatan sangat kecil
+    if (!hasInput && state.vel.lengthSq() < 0.0004) state.vel.set(0, 0, 0);
+
+    state.pos.x += state.vel.x * dt;
+    state.pos.z += state.vel.z * dt;
+    resolveCollisions(state.pos);
+
+    const speed = Math.hypot(state.vel.x, state.vel.z);
+    state.moving = speed > 0.35;
+
+    // Orientasi arah depan — mulus ke arah gerak
+    if (state.moving) {
+      const targetYaw = Math.atan2(state.vel.x, state.vel.z);
+      let diff = targetYaw - state.facing;
+      while (diff >  Math.PI) diff -= Math.PI * 2;
+      while (diff < -Math.PI) diff += Math.PI * 2;
+      state.facing += diff * Math.min(1, CFG.TURN_LERP * dt);
+    }
+
+    // Animasi bob / langkah sederhana
+    if (state.moving) {
+      state.bobTime += dt * (state.sprint ? 1.45 : 1.0) * CFG.BOB_FREQ;
+      const bob = Math.abs(Math.sin(state.bobTime)) * 0.14 * (speed / CFG.SPEED_WALK);
+      player.position.set(state.pos.x, bob, state.pos.z);
+      player.rotation.z = Math.sin(state.bobTime) * 0.06;
+      capsule.scale.y = 1 + Math.sin(state.bobTime * 2) * 0.03;
+    } else {
+      state.bobTime = 0;
+      player.position.set(state.pos.x, 0, state.pos.z);
+      player.rotation.z *= 0.85;
+      capsule.scale.y += (1 - capsule.scale.y) * 0.15;
+    }
+
+    player.rotation.y = state.facing;
+
+    // Pedang bergoyang sedikit saat bergerak
+    sword.rotation.z = -0.25 + (state.moving ? Math.sin(state.bobTime * 0.9) * 0.12 : 0);
+
+    // Ring sedikit mengecil saat "melompat" bob
+    groundRing.scale.setScalar(1 - clamp(player.position.y, 0, 0.2) * 0.8);
+  }
+
+  function resetPlayer() {
+    state.pos.set(0, 0, 0);
+    state.vel.set(0, 0, 0);
+    state.facing = 0;
+    state.hp = state.maxHp;
+    state.stamina = 100;
+    player.position.set(0, 0, 0);
+    player.rotation.set(0, 0, 0);
+  }
+
+  // ------------------------------------------------------------------
+  // Kamera isometrik terkunci — mengikuti pemain dengan smoothing
+  // ------------------------------------------------------------------
+  const camTargetPos = new THREE.Vector3();
+  const camLookAt    = new THREE.Vector3(0, 1, 0);
+  const camDesired   = new THREE.Vector3();
+
+  function updateCamera(dt) {
+    camDesired.copy(state.pos).add(CFG.CAM_OFFSET);
+    const kCam = 1 - Math.exp(-CFG.CAM_LERP * dt);
+    camTargetPos.lerp(camDesired, kCam);
+    camera.position.copy(camTargetPos);
+
+    const kLook = 1 - Math.exp(-CFG.LOOK_LERP * dt);
+    camLookAt.lerp(new THREE.Vector3(state.pos.x, 1.1, state.pos.z), kLook);
+    camera.lookAt(camLookAt);
+
+    // shadow camera ikut bergerak agar shadow tetap tajam
+    keyLight.position.set(state.pos.x + 14, 26, state.pos.z + 10);
+    keyLight.target.position.set(state.pos.x, 0, state.pos.z);
+    keyLight.target.updateMatrixWorld();
+  }
+  camTargetPos.copy(camera.position);
+
+  // ------------------------------------------------------------------
+  // Efek obor berkedip
+  // ------------------------------------------------------------------
+  function updateTorches(t) {
+    for (const tr of torches) {
+      const f = 0.78 + Math.sin(t * 7.3 + tr.phase) * 0.13 + Math.sin(t * 17.1 + tr.phase * 2) * 0.09;
+      tr.light.intensity = tr.base * f;
+      tr.flame.scale.setScalar(0.85 + f * 0.3);
+    }
+  }
+
+  // ------------------------------------------------------------------
+  // HUD
+  // ------------------------------------------------------------------
+  const elFps = document.getElementById('fps');
+  const elPos = document.getElementById('pos');
+  const elFacing = document.getElementById('facing');
+  const elSpeed = document.getElementById('speed');
+  const elHp = document.getElementById('hp-fill');
+  const elHpText = document.getElementById('hp-text');
+  const elStam = document.getElementById('stam-fill');
+
+  const DIR_NAMES = ['Utara', 'Timur Laut', 'Timur', 'Tenggara', 'Selatan', 'Barat Daya', 'Barat', 'Barat Laut'];
+  function facingName(yaw) {
+    // yaw 0 = +Z (selatan pada peta dunia kita)
+    let deg = (yaw * 180 / Math.PI + 360) % 360;
+    const idx = Math.round(((deg + 180) % 360) / 45) % 8;
+    return DIR_NAMES[idx] + ' (' + Math.round(deg) + '°)';
+  }
+
+  let hudTimer = 0, frames = 0, fpsAccum = 0;
+  function updateHUD(dt) {
+    frames++; fpsAccum += dt; hudTimer += dt;
+    if (hudTimer < 0.18) return;
+    const fps = frames / Math.max(fpsAccum, 0.0001);
+    frames = 0; fpsAccum = 0; hudTimer = 0;
+
+    elFps.textContent = Math.round(fps);
+    elPos.textContent = state.pos.x.toFixed(1) + ', ' + state.pos.z.toFixed(1);
+    elFacing.textContent = facingName(state.facing);
+    elSpeed.textContent = Math.hypot(state.vel.x, state.vel.z).toFixed(1);
+    elHp.style.width = (state.hp / state.maxHp * 100) + '%';
+    elHpText.textContent = Math.round(state.hp) + ' / ' + state.maxHp;
+    elStam.style.width = state.stamina + '%';
+  }
+
+  // ------------------------------------------------------------------
+  // Resize
+  // ------------------------------------------------------------------
+  function onResize() {
+    const w = window.innerWidth, h = window.innerHeight;
+    camera.aspect = w / h;
+    camera.updateProjectionMatrix();
+    renderer.setSize(w, h);
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+  }
+  window.addEventListener('resize', onResize);
+  window.addEventListener('orientationchange', () => setTimeout(onResize, 250));
+
+  // ------------------------------------------------------------------
+  // Loop utama
+  // ------------------------------------------------------------------
+  const clock = new THREE.Clock();
+  let rafId = 0;
+
+  function animate() {
+    rafId = requestAnimationFrame(animate);
+    const dt = Math.min(clock.getDelta(), 0.05); // clamp dt (anti tab-spiral)
+    const t = clock.elapsedTime;
+
+    updatePlayer(dt);
+    updateCamera(dt);
+    updateTorches(t);
+    updateHUD(dt);
+
+    renderer.render(scene, camera);
+  }
+
+  // mulai
+  onResize();
+  animate();
+  requestAnimationFrame(() => {
+    const l = document.getElementById('loading');
+    l.classList.add('hide');
+    setTimeout(() => l.remove(), 600);
+  });
+
+  // Bersih-bersih saat halaman ditutup
+  window.addEventListener('beforeunload', () => {
+    cancelAnimationFrame(rafId);
+    renderer.dispose();
+  });
+
+})();
+</script>
+</body>
+</html>
